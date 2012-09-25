@@ -5,11 +5,8 @@
   (:use :cl)
   (:nicknames :lex)
   (:export
-   #:compile-re
-   #:match-re
-   #:split-re
-   #:replace-re
-   #:deflexer))
+   #:deflexer
+   #:parse))
 
 (in-package :lexer)
 
@@ -19,10 +16,10 @@
   (:documentation "Regular expression."))
 
 (defclass lex-state ()
-  ((source :initarg :source :accessor lex-source)
-   (pos    :initarg :pos    :accessor lex-pos)
-   (line   :initarg :line   :accessor lex-line)
-   (token  :initarg :token  :accessor lex-token))
+  ((source             :initarg :source :accessor lex-source)
+   (pos    :initform 0 :initarg :pos    :accessor lex-pos)
+   (line   :initform 1 :initarg :line   :accessor lex-line)
+   (token              :initarg :token  :accessor lex-token))
   (:documentation "Token pattern match."))
 
 (defmethod print-object ((re re) s)
@@ -34,23 +31,32 @@
   "Output the result of a match."
   (print-unreadable-object (lex s :type t :identity t)))
 
+(defun parse (source p)
+  "Parse a string with a parse combinator. Return the token parsed or nil."
+  (with-output-to-string (s)
+    (let ((st (make-instance 'lex-state :source source :token s)))
+      (unless (funcall p st)
+        (return-from parse nil)))))
+
 (defun next (st pred)
   "Read the next character, update the pos, test against predicate."
-  (with-slots (source pos line)
+  (with-slots (source pos line token)
+      st
     (let ((c (char source pos)))
       (when (funcall pred c)
         (prog1
             c
+          (princ c token)
           (incf pos)
           (when (char= c #\newline)
             (incf line)))))))
 
-(defun bind (m p)
+(defun bind (&rest ps)
   "Bind parse combinators together to compose a new combinator."
   #'(lambda (st)
-      (let ((nst (funcall m st)))
-        (when nst
-          (funcall p nst)))))
+      (dolist (p ps t)
+        (unless (funcall p st)
+          (return nil)))))
 
 (defun fail (reason)
   "Fail a parse combinator."
@@ -60,20 +66,24 @@
 (defun either (p1 p2)
   "Try one parse combinator, if it fails, try another."
   #'(lambda (st)
-      (let ((pos (lex-pos st)))
-        (or (funcall p1 st)
-            (progn
-              (setf (lex-pos st) pos)
-              (funcall p2 st))))))
+      (with-slots (pos token)
+          st
+        (let ((old-pos pos)
+              (token-pos (file-position token)))
+          (or (funcall p1 st)
+              (progn
+                (setf pos old-pos)
+                (file-position token token-pos)
+                (funcall p2 st)))))))
 
 (defun any-char (&optional match-newline-p)
   "Expect a non-eoi character."
   (flet ((pred (x)
-           (and x (if match-newline-p t (char<> x #\newline)))))
+           (and x (if match-newline-p t (char/= x #\newline)))))
     #'(lambda (st)
         (next st #'pred))))
 
-(defun match (c &optional case-fold)
+(defun ch (c &optional case-fold)
   "Match an exact character."
   (flet ((pred (x)
            (let ((test (if case-fold #'char-equal #'char=)))
@@ -104,7 +114,7 @@
 
 (defun many1 (p)
   "Match a parse combinator one or more times."
-  (bind p (many p))
+  (bind p (many p)))
 
 (defun many-til (p term)
   "Match a parse combinator many times until a terminal."
@@ -114,17 +124,5 @@
   "Match everything between two characters."
   (bind b1 (many-til (any-char match-newline-p) b2)))
 
-(defun compile-re (pattern &key case-fold)
-  "Create a regular expression from a pattern string."
-  (let ((re (make-instance 're :pattern pattern :expression nil)))
-    (with-input-from-string (s pattern)
-      (do ((c (read-char s nil nil)
-              (read-char s nil nil)))
-          ((null c) re)
-        (case c
-         (#\%
-         (#\[
-         (#\(
-         (#\
 
 (provide "LEXER")
