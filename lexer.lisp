@@ -156,12 +156,15 @@
   ((expr :none-of) (none-of $1))
 
   ;; sets of characters ([..], [^..])
-  ((expr :set chars :end-set) (one-of $2 :case-fold *case-fold*))
-  ((expr :set :none chars :end-set) (none-of $2 :case-fold *case-fold*))
+  ((expr :set :none set) (none-of $3 :case-fold *case-fold*))
+  ((expr :set set) (one-of $2 :case-fold *case-fold*))
 
-  ;; list of character (for sets)
+  ;; 
+  ((set chars) $1)
+
+  ;; character set (just a list of characters)
   ((chars :char chars) (cons $1 $2))
-  ((chars :char) (list $1)))
+  ((chars :char :end-set) (list $1)))
 
 (defun compile-re (pattern &key case-fold multi-line)
   "Create a regular expression pattern match."
@@ -249,18 +252,25 @@
                   match
                 (setf i (match-pos-end match))))))
 
-(defun split-re (re s &key (start 0) (end (length s)) all)
+(defun split-re (re s &key (start 0) (end (length s)) all coalesce-seps)
   "Split a string into one or more strings by regexp pattern match."
   (if (not all)
       (let ((match (find-re re s :start start :end end)))
         (when match
           (values (subseq s start (match-pos-start match))
                   (subseq s (match-pos-end match)))))
-    (let ((seps (find-re re s :start start :end end :all t)))
-      (flet ((split (splits match)
-               (let ((s (subseq s (cdr splits) (match-pos-start match))))
-                 (cons (cons s (car splits)) (match-pos-end match)))))
-        (car (reduce #'split seps :initial-value (cons nil 0)))))))
+    (let* ((hd (list nil)) 
+           (tl hd)
+           (pos 0))
+      (flet ((push-match (&optional m)
+               (let ((s (subseq s pos (when m (match-pos-start m)))))
+                 (unless (and coalesce-seps (zerop (length s)))
+                   (setf tl (cdr (rplacd tl (list s)))))
+                 (setf pos (when m (match-pos-end m))))))
+        (loop :for sep :in (find-re re s :start start :end end :all t) :do
+          (push-match sep))
+        (push-match))
+      (cdr hd))))
 
 (defun replace-re (re with s &key (start 0) (end (length s)) all)
   "Split a string into one or more strings by regexp pattern match."
