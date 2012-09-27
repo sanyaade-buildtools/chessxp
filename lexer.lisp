@@ -8,12 +8,21 @@
   (:use :cl :parsergen)
   (:nicknames :lex)
   (:export
+   ;; pattern functions
    #:compile-re
    #:match-re
    #:find-re
    #:split-re
-   #:deflexer
-   #:parse))
+   #:replace-re
+
+   ;; match functions
+   #:match-string
+   #:match-captures
+   #:match-start-pos
+   #:match-end-pos
+
+   ;; tokenizer macro
+   #:deflexer))
 
 (in-package :lexer)
 
@@ -22,19 +31,22 @@
    (expression :initarg :expression :accessor re-expression))
   (:documentation "Regular expression."))
 
+(defclass re-match ()
+  ((match    :initarg :match    :accessor match-string)
+   (captures :initarg :captures :accessor match-captures)
+   (start    :initarg :start    :accessor match-start-pos)
+   (end      :initarg :end      :accessor match-end-pos))
+  (:documentation "Matched token."))
+
 (defclass lex-state ()
   ((source   :initarg :source   :accessor lex-source)
    (captures :initarg :captures :accessor lex-captures))
-  (:documentation "Token pattern match."))
+  (:documentation "Token pattern matching state."))
 
 (defmethod print-object ((re re) s)
   "Output a regular expression to a stream."
   (print-unreadable-object (re s :type t)
-    (princ (re-pattern re) s)))
-
-(defmethod print-object ((lex lex-state) s)
-  "Output the result of a match."
-  (print-unreadable-object (lex s :type t :identity t)))
+    (format s "~s" (re-pattern re))))
 
 (defvar *case-fold* nil "Case-insentitive comparison.")
 (defvar *multi-line* nil "Dot and EOL also match newlines.")
@@ -49,6 +61,52 @@
 (defconstant +spaces+ #.(format nil "~c~c" #\space #\tab))
 (defconstant +newlines+ #.(format nil "~c~c~c" #\newline #\return #\linefeed))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (flet ((dispatch-re (s c n)
+           (declare (ignorable c n))
+           (let ((re (with-output-to-string (re)
+                       (loop :for c := (read-char s t nil t) :do 
+                         (case c
+                           (#\/ (return))
+                           (#\\ (let ((c (read-char s t nil t)))
+                                  (princ c re)))
+                           (otherwise 
+                            (princ c re)))))))
+             (compile-re re))))
+    (set-dispatch-macro-character #\# #\/ #'dispatch-re)))
+
+(defmacro deflexer (lexer (&rest options) &body tokens)
+  "Create a tokenizing function."
+  (declare (ignorable options))
+  (let ((lex-pos (gensym "lex-pos"))
+        (tokenize (gensym "tokenize"))
+        (source (gensym "source"))
+        (captures (gensym "capture"))
+        (end-pos (gensym "end-pos"))
+        ($$ (intern "$$" *package*))
+        ($1 (intern "$1" *package*))
+        ($2 (intern "$2" *package*))
+        ($3 (intern "$3" *package*))
+        ($4 (intern "$4" *package*))
+        ($5 (intern "$5" *package*))
+        ($6 (intern "$6" *package*))
+        ($7 (intern "$7" *package*))
+        ($8 (intern "$8" *package*))
+        ($9 (intern "$9" *package*)))
+    `(defun ,lexer (,source)
+       (loop :with ,lex-pos := 0 :until (= ,lex-pos (length ,source)) :nconc
+         (block ,tokenize
+           ,@(loop :for token :in tokens :collect
+               `(multiple-value-bind (,$$ ,captures ,end-pos)
+                    (match-re ,(car token) ,source :start ,lex-pos)
+                  (when ,$$
+                    (setf ,lex-pos ,end-pos)
+                    (return-from ,tokenize
+                      (destructuring-bind (&optional ,$1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7, $8, $9)
+                          ,captures
+                        (list ,@(cdr token)))))))
+           (error "Syntax error"))))))
+
 (defparser re-parser
   ((start exprs) $1)
 
@@ -57,18 +115,24 @@
   ((exprs compound) $1)
 
   ;; either expression a or b (a|b)
-  ((compound expr :or expr) (either $1 $3))
+  ((compound simple :or simple) (either $1 $3))
+  ((compound simple) $1)
 
   ;; optional and repition (?, *, +)
-  ((compound expr :maybe) (maybe $1))
-  ((compound expr :many) (many $1))
-  ((compound expr :many1) (many1 $1))
+  ((simple expr :maybe) (maybe $1))
+  ((simple expr :many) (many $1))
+  ((simple expr :many1) (many1 $1))
 
-  ;; single expression
-  ((compound expr) $1)
+  ;; single, simple expression
+  ((simple expr) $1)
 
   ;; capture expression (x)
-  ((expr :capture compound :end-capture) $2)
+  ((expr :capture compound :end-capture) (capture $2))
+
+  ;; bounded expression
+  ((expr :between) 
+   (between (ch (car $1) :case-fold *case-fold*)
+            (ch (cdr $1) :case-fold *case-fold*)))
 
   ;; single character
   ((expr :char) (ch $1 :case-fold *case-fold*))
@@ -77,30 +141,9 @@
   ((expr :any) (any-char :match-newline-p *multi-line*))
   ((expr :eol) (eol :match-newline-p *multi-line*))
 
-  ;; escaped characters and named sets
-  ((expr :escape :char)
-   (case $2
-    (#\s (one-of +spaces+))
-    (#\S (none-of +spaces+))
-    (#\n (one-of +newlines+))
-    (#\N (none-of +newlines+))
-    (#\a (one-of +letter+))
-    (#\A (none-of +letter+))
-    (#\l (one-of +lowercase-letter+))
-    (#\L (none-of +lowercase-letter+))
-    (#\u (one-of +uppercase-letter+))
-    (#\U (none-of +uppercase-letter+))
-    (#\p (one-of +punctuation+))
-    (#\P (none-of +punctuation+))
-    (#\w (one-of +alpha-numeric+))
-    (#\W (none-of +alpha-numeric+))
-    (#\d (one-of +digit+))
-    (#\D (none-of +digit+))
-    (#\x (one-of +hex-digit+))
-    (#\X (none-of +hex-digit+))
-    (#\z (ch #\null))
-    (otherwise
-     (ch $2 :case-fold *case-fold*))))
+  ;; named sets
+  ((expr :one-of) (one-of $1))
+  ((expr :none-of) (none-of $1))
 
   ;; sets of characters ([..], [^..])
   ((expr :set chars :end-set) (one-of $2 :case-fold *case-fold*))
@@ -119,7 +162,33 @@
                (let ((c (read-char s nil nil)))
                  (when c
                    (case c
-                     (#\% :escape)
+                     (#\%
+                      (let ((c (read-char s)))
+                        (case c
+                          (#\b (let ((b1 (read-char s))
+                                     (b2 (read-char s)))
+                                 (values :between (cons b1 b2))))
+                          (#\s (values :one-of +spaces+))
+                          (#\S (values :none-of +spaces+))
+                          (#\n (values :one-of +newlines+))
+                          (#\N (values :none-of +newlines+))
+                          (#\a (values :one-of +letter+))
+                          (#\A (values :none-of +letter+))
+                          (#\l (values :one-of +lowercase-letter+))
+                          (#\L (values :none-of +lowercase-letter+))
+                          (#\u (values :one-of +uppercase-letter+))
+                          (#\U (values :none-of +uppercase-letter+))
+                          (#\p (values :one-of +punctuation+))
+                          (#\P (values :none-of +punctuation+))
+                          (#\w (values :one-of +alpha-numeric+))
+                          (#\W (values :none-of +alpha-numeric+))
+                          (#\d (values :one-of +digit+))
+                          (#\D (values :none-of +digit+))
+                          (#\x (values :one-of +hex-digit+))
+                          (#\X (values :none-of +hex-digit+))
+                          (#\z (values :char #\null))
+                          (otherwise
+                           (values :char c)))))
                      (#\$ :eol)
                      (#\. :any)
                      (#\^ :none)
@@ -139,45 +208,57 @@
 
 (defun match-re (re s &key (start 0) (end (length s)) exact)
   "Check to see if a regexp pattern matches a string."
-  (with-input-from-string (source s :start start :end end)
-    (let ((st (make-instance 'lex-state :source source)))
-      (when (funcall (re-expression re) st)
-        (let ((pos (file-position source)))
-          (if exact
-              (when (= pos end)
-                (values s pos))
-          (values (subseq s start pos) pos)))))))
+  (flet ((capture (list place)
+           (let ((start (car place))
+                 (end (cdr place)))
+             (cons (subseq s start end) list))))
+    (with-input-from-string (source s :start start :end end)
+      (let ((st (make-instance 'lex-state :source source :captures nil)))
+        (when (funcall (re-expression re) st)
+          (let ((captures (reduce #'capture (lex-captures st) :initial-value nil))
+                (end-pos (file-position source)))
+            (if exact
+                (when (= end-pos end)
+                    (values s captures end-pos))
+            (values (subseq s start end-pos) captures end-pos))))))))
 
 (defun find-re (re s &key (start 0) (end (length s)) all)
   "Find a regexp pattern match somewhere in a string."
-  (do ((st (make-instance 'lex-state :source s :pos start :end end)
-           (make-instance 'lex-state :source s :pos start :end end)))
-      ((funcall (re-expression re) st)
-       (let ((m (cons start (lex-pos st))))
-         (if (not all)
-             m
-           (cons m (find-re re s :start (lex-pos st) :end end :all t)))))
-    (unless (< (incf start) (length s))
-      (return nil))))
+  (flet ((find-next (start)
+           (loop :for i :from start :below end :do
+             (multiple-value-bind (match captures end-pos)
+                 (match-re re s :start i :end end :exact nil)
+               (declare (ignore captures))
+               (when match
+                 (return (values match end-pos)))))))
+    (if (not all)
+        (find-next start)
+      (let* ((hd (list nil)) (tl hd))
+        (do ((i start))
+            ((or (null i) (= i end))
+             (cdr hd))
+          (multiple-value-bind (match end-pos)
+              (find-next i)
+            (setf i end-pos)
+            (if match
+                (setf tl (cdr (rplacd tl (list match))))
+              (return (cdr hd)))))))))
 
-(defun split-re (re s &key (start 0) (end (length s)) all coalesce-seps)
+(defun split-re (re s &key (start 0) (end (length s)) all)
   "Split a string into one or more strings by regexp pattern match."
-  (let ((m (find-re re s :start start :end end :all all)))
-    (if (null m)
-        (subseq s start end)
-      (if (null all)
-          (destructuring-bind (left right)
-              m
-            (values (subseq s (car left) (cdr left))
-                    (subseq s (car right) (cdr right))))
-        (mapcar #'(lambda (m) (subseq s (car m) (cdr m))) m)))))
+  (declare (ignore re start end all)))
+
+(defun replace-re (re s with &key (start 0) (end (length s)) all)
+  "Split a string into one or more strings by regexp pattern match."
+  (declare (ignore re with start end all)))
 
 (defun next (st pred)
   "Read the next character, update the pos, test against predicate."
   (let ((c (read-char (lex-source st) nil nil)))
     (if (funcall pred c)
         t
-      (unread-char c (lex-source st)))))
+      (when c
+        (unread-char c (lex-source st))))))
 
 (defun bind (&rest ps)
   "Bind parse combinators together to compose a new combinator."
@@ -186,10 +267,14 @@
         (unless (funcall p st)
           (return nil)))))
 
-(defun fail (reason)
-  "Fail a parse combinator."
+(defun capture (p)
+  "Push a capture of a combinator onto the lex state."
   #'(lambda (st)
-      (error "Parse error on line ~a: ~a" (lex-line st) reason)))
+      (with-slots (source captures)
+          st
+        (let ((start (file-position source)))
+          (when (funcall p st)
+            (push (cons start (file-position source)) captures))))))
 
 (defun either (p1 p2)
   "Try one parse combinator, if it fails, try another."
@@ -261,6 +346,6 @@
 
 (defun between (b1 b2 &key match-newline-p)
   "Match everything between two characters."
-  (bind b1 (many-til (any-char match-newline-p) b2)))
+  (bind b1 (many-til (any-char :match-newline-p match-newline-p) b2)))
 
 (provide "LEXER")
