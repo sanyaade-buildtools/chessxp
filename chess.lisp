@@ -35,6 +35,7 @@
             "eval.lisp"
             "game.lisp"
             "interface.lisp"
+            "lexer.lisp"
             "fen.lisp"
             "pgn.lisp")
   :rules ((:in-order-to :compile :all (:requires (:load :previous)))))

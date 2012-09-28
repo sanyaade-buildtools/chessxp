@@ -100,6 +100,7 @@
        (when ,v
          (destructuring-bind (,$$ &optional ,$1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9)
              (cons (match-string ,v) (match-captures ,v))
+           (declare (ignorable ,$$ ,$1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9))
            (values (progn ,@body) t))))))
 
 (defmacro deflexer (lexer (&rest options) &body tokens)
@@ -117,7 +118,9 @@
                   (setf ,lex-pos (match-pos-end ,match))
                   (return-from ,tokenize
                     (list ,@(cdr token)))))
-           (error "Syntax error"))))))
+           (let ((char (char ,source ,lex-pos))
+                 (line (count #\newline ,source :end ,lex-pos)))
+             (error "Syntax error on line ~a near '~c'" line char)))))))
 
 (defparser re-parser
   ((start exprs) $1)
@@ -156,15 +159,14 @@
   ((expr :none-of) (none-of $1))
 
   ;; sets of characters ([..], [^..])
-  ((expr :set :none set) (none-of $3 :case-fold *case-fold*))
-  ((expr :set set) (one-of $2 :case-fold *case-fold*))
-
-  ;; 
-  ((set chars) $1)
+  ((expr :set :none chars) (none-of $3 :case-fold *case-fold*))
+  ((expr :set chars) (one-of $2 :case-fold *case-fold*))
 
   ;; character set (just a list of characters)
+  ((chars :one-of chars) (append (coerce $1 'list) $2))
+  ((chars :none-of chars) (append (coerce $1 'list) $2))
   ((chars :char chars) (cons $1 $2))
-  ((chars :char :end-set) (list $1)))
+  ((chars :end-set) nil))
 
 (defun compile-re (pattern &key case-fold multi-line)
   "Create a regular expression pattern match."
