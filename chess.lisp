@@ -1,6 +1,9 @@
 ;;;; chess.lisp
 ;;;;
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (load #p"~/Projects/lexer/lexer.lisp"))
+
 (defpackage :chess
   (:use :cl :lw :capi :gp)
   (:export
@@ -35,7 +38,6 @@
             "eval.lisp"
             "game.lisp"
             "interface.lisp"
-            "lexer.lisp"
             "fen.lisp"
             "pgn.lisp")
   :rules ((:in-order-to :compile :all (:requires (:load :previous)))))
