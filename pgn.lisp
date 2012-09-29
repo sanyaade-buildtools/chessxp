@@ -44,20 +44,25 @@
   ("%+"                       :check))
 
 (defparser pgn-parser
-  ((pgn game) $1)
+  ((pgn games) $1)
 
+  ;; a PGN can have multiple games in it
   ((games game games) `(,$1 ,@$2))
   ((games game) `(,$1))
 
+  ;; a game has tags, a move list, and a result
   ((game tags move-list :result)
    (make-pgn :tags $1 :moves $2 :result $3))
 
+  ;; tags are meta information about the game
   ((tags :tag tags) `(,$1 ,@$2))
   ((tags :tag) `(,$1))
 
+  ;; white or black may start the game (PGN could be mid-game)
   ((move-list white-move-list) $1)
   ((move-list black-move-list) $1)
 
+  ;; parse a move list beginning with a white move
   ((white-move-list :int :dot white-move comments black-move-list)
    `(,(apply #'make-move `(,@$3 :comments ,$4)) ,@$5))
   ((white-move-list :int :dot white-move black-move comments white-move-list)
@@ -68,33 +73,42 @@
    `(,(apply #'make-move $3)))
   ((white-move-list))
 
+  ;; parse a move list beginning with a black move
   ((black-move-list :int :dots black-move comments white-move-list)
    `(,(apply #'make-move `(,@$3 :comments ,$4)) ,@$5))
   ((black-move-list :int :dots black-move white-move-list)
    `(,(apply #'make-move $3) ,@$4))
 
+  ;; list of comments
   ((comments :comment comments) `(,$1 ,@$2))
   ((comments :comment) `(,$1))
 
+  ;; create a white or black player move
   ((white-move move) `(:player :white ,@$1))
   ((black-move move) `(:player :black ,@$1))
 
+  ;; moves can check or mate
   ((move action check) `(,@$1 ,@$2))
   ((move action) $1)
 
+  ;; board position
   ((tile :file :int) (tile $2 $1))
 
+  ;; check status
   ((check :check) '(:check :check))
   ((check :mate) '(:check :mate))
 
+  ;; pawn, piece, and castle moves
   ((action :pawn pawn) `(:piece :p ,@$1))
   ((action pawn) `(:piece :p ,@$1))
   ((action piece) $1)
   ((action castle) `(:castle ,$1))
 
+  ;; castling and pawn promotion
   ((castle :castle) $1)
   ((promote :promote :piece) $2)
 
+  ;; pawn moves
   ((pawn :file :capture tile promote)
    `(:piece :p :file ,$1 :capture t :tile ,$3 :promote ,$4))
   ((pawn :file :capture tile)
@@ -104,9 +118,10 @@
   ((pawn tile)
    `(:piece :p :tile ,$1))
 
+  ;; typical piece moves
   ((piece :piece :file :int :capture tile)
    `(:piece ,$1 :file ,$2 :rank ,$3 :capture t :tile ,$5))
-  ((piece :piece :file :int tile)
+  ((piece :piece tile tile)
    `(:piece ,$1 :file ,$2 :rank ,$3 :tile ,$4))
   ((piece :piece :file :capture tile)
    `(:piece ,$1 :file ,$2 :capture t :tile ,$4))
